@@ -54,16 +54,17 @@ type MapReduce struct {
   nReduce int  // Number of Reduce jobs
   file string  // Name of input file
   MasterAddress string
-  registerChannel chan string
-  DoneChannel chan bool
+  registerChannel chan string // tell master workers' address
+  DoneChannel chan bool // tell main or test finish
   alive bool
   l net.Listener
-  stats *list.List
+  stats *list.List // count each worker complete how many jobs
 
   // Map of registered workers that you need to keep up to date
   Workers map[string]*WorkerInfo 
 
   // add any additional state here
+  Done chan bool
 }
 
 func InitMapReduce(nmap int, nreduce int,
@@ -76,8 +77,10 @@ func InitMapReduce(nmap int, nreduce int,
   mr.alive = true
   mr.registerChannel = make(chan string)
   mr.DoneChannel = make(chan bool)
+  mr.Workers = make(map[string]*WorkerInfo)
 
   // initialize any additional state here
+  mr.Done = make(chan bool)
   return mr
 }
 
@@ -124,7 +127,7 @@ func (mr *MapReduce) StartRegistrationServer() {
           conn.Close()
         }()
       } else {
-        DPrintf("RegistrationServer: accept error", err)
+        //DPrintf("RegistrationServer: accept error", err)
         break
       }
     }
@@ -140,7 +143,6 @@ func MapName(fileName string, MapJob int) string {
 
 // Split bytes of input file into nMap splits, but split only on white space
 func (mr *MapReduce) Split(fileName string) {
-  fmt.Printf("Split %s\n", fileName)
   infile, err := os.Open(fileName);
   if err != nil {
     log.Fatal("Split: ", err);
@@ -150,7 +152,9 @@ func (mr *MapReduce) Split(fileName string) {
   if err != nil {
     log.Fatal("Split: ", err);
   }
+  // file size (occupied capacity)
   size := fi.Size()
+  // split 824-mrinput.txt to nMap chunk and dump files
   nchunk := size / int64(mr.nMap);
   nchunk += 1
 
@@ -220,6 +224,7 @@ func DoMap(JobNumber int, fileName string,
     enc := json.NewEncoder(file)
     for e := res.Front(); e != nil; e = e.Next() {
       kv := e.Value.(KeyValue)
+      // only encounter legal mod number (=r) will dump a tmp file for Reduce, which may cause error because if there is no tmp file created, func DoReduce couldn't read the file. 
       if hash(kv.Key) % uint32(nreduce) == uint32(r) {
         err := enc.Encode(&kv);
         if err != nil {
@@ -243,6 +248,7 @@ func DoReduce(job int, fileName string, nmap int,
   for i := 0; i < nmap; i++ {
     name := ReduceName(fileName, i, job)
     fmt.Printf("DoReduce: read %s\n", name)
+    // might be error because no file created in DoMap
     file, err := os.Open(name)
     if err != nil {
       log.Fatal("DoReduce: ", err);
@@ -368,14 +374,9 @@ func (mr *MapReduce) CleanupRegistration() {
 
 // Run jobs in parallel, assuming a shared file system
 func (mr *MapReduce) Run() {
-  fmt.Printf("Run mapreduce job %s %s\n", mr.MasterAddress, mr.file)
-
   mr.Split(mr.file)
   mr.stats = mr.RunMaster()
   mr.Merge()
   mr.CleanupRegistration()
-
-  fmt.Printf("%s: MapReduce done\n", mr.MasterAddress)
-
   mr.DoneChannel <- true
 }

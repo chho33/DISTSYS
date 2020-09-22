@@ -26,7 +26,64 @@ func (mr *MapReduce) KillWorkers() *list.List {
   return l
 }
 
+
+func (mr *MapReduce) SpawnJob(job JobType) {
+
+  var n int
+  switch job {
+  case Map:
+    n = mr.nMap
+  case Reduce:
+    n = mr.nReduce
+  }
+
+  for i := 0; i<n; i++ {
+    go mr.DoJob(job, i)
+  }
+
+  for i := 0; i<n; i++ {
+    fmt.Println(i)
+    <- mr.Done
+  } 
+
+}
+
+
+func (mr *MapReduce) DoJob(job JobType, jobNumber int) {
+
+  var other int
+  switch job {
+  case Map:
+    other = mr.nReduce
+  case Reduce:
+    other = mr.nMap 
+  }
+
+  for {
+    worker := <- mr.registerChannel
+
+    var reply DoJobReply;
+    args := &DoJobArgs{File: mr.file,
+                       Operation: job,
+                       JobNumber: jobNumber,
+                       NumOtherPhase: other}
+
+    ok := call(worker, "Worker.DoJob", args, &reply)
+
+    if ok {
+      mr.Done <- true 
+      Register(mr.MasterAddress, worker)
+      return
+    } else {
+      fmt.Printf("[%s] %s fail!\n", job, worker)
+    }
+  }
+
+}
+
+
 func (mr *MapReduce) RunMaster() *list.List {
-  // Your code here
+  mr.SpawnJob(Map)
+  mr.SpawnJob(Reduce)
   return mr.KillWorkers()
 }
